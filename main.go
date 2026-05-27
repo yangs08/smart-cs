@@ -7,6 +7,7 @@ import (
 
 	"helpdesk-agent/agent"
 	"helpdesk-agent/api"
+	"helpdesk-agent/knowledge"
 	"helpdesk-agent/llm"
 	"helpdesk-agent/memory"
 	"helpdesk-agent/tracing"
@@ -18,22 +19,42 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// 1. Initialize LLM registry from environment variables.
-	reg, err := llm.NewRegistry(ctx)
+	// 1. Initialize model router from environment variables.
+	router, err := llm.NewRouter(ctx)
 	if err != nil {
-		log.Fatalf("init llm registry: %v", err)
+		log.Fatalf("init model router: %v", err)
 	}
 
-	// 2. Build supervisor agent.
+	// 2. Initialize hybrid knowledge store.
+	embedder := knowledge.NewOllamaEmbedder(
+		envOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
+		envOrDefault("LLM_EMBED_MODEL", "nomic-embed-text"),
+	)
+	kb, err := knowledge.NewHybridStore(
+		envOrDefault("QDRANT_ADDR", "localhost:6333"),
+		envOrDefault("QDRANT_COLLECTION", "helpdesk_kb"),
+		embedder,
+		knowledge.DefaultDocs(),
+	)
+	if err != nil {
+		log.Fatalf("init knowledge store: %v", err)
+	}
+
+	// Try to init Qdrant collection (best-effort — falls back to BM25-only).
+	if err := knowledge.InitKnowledgeBase(ctx, kb); err != nil {
+		log.Printf("[knowledge] qdrant unavailable, using BM25-only: %v", err)
+	}
+
+	// 3. Build supervisor agent.
 	supervisor, err := agent.BuildSupervisor(ctx, &agent.HelpDeskConfig{
-		DeepSeek: reg.Get("deepseek"),
-		Gemini:   reg.Get("gemini"),
+		Router: router,
+		KB:     kb,
 	})
 	if err != nil {
 		log.Fatalf("build supervisor: %v", err)
 	}
 
-	// 3. Initialize memory layers.
+	// 4. Initialize memory layers.
 	shortTerm := memory.NewShortTermMemory(20)
 
 	dataDir := os.Getenv("MEMORY_DATA_DIR")
@@ -44,16 +65,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("init long-term memory: %v", err)
 	}
-	_ = longTerm
 
-	// 4. Create runner.
+	// 5. Create runner.
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
 		Agent:           supervisor,
 		EnableStreaming: true,
-		CheckPointStore: nil, // Enable for multi-turn persistence
 	})
 
-	// 5. Start API server.
+	// 6. Start API server.
 	tracer := tracing.NewTracer()
 	_ = tracer
 
@@ -71,4 +90,11 @@ func main() {
 	if err := ginEngine.Run(":" + port); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

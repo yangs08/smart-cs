@@ -5,35 +5,36 @@ import (
 	"fmt"
 
 	"helpdesk-agent/agent/helpdesk"
+	"helpdesk-agent/knowledge"
+	"helpdesk-agent/llm"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 )
 
 // HelpDeskConfig holds the dependencies for building the help desk supervisor.
 type HelpDeskConfig struct {
-	DeepSeek model.BaseChatModel
-	Gemini   model.BaseChatModel
+	Router *llm.Router
+	KB     *knowledge.HybridStore
 }
 
 // BuildSupervisor creates the complete help desk supervisor with all
 // sub-agents and tools registered.
 func BuildSupervisor(ctx context.Context, cfg *HelpDeskConfig) (adk.ResumableAgent, error) {
 	// 1. Build Lambda tools registered directly on the Supervisor.
-	intentTool, err := helpdesk.IntentClassifyTool(cfg.DeepSeek)
+	intentTool, err := helpdesk.IntentClassifyTool(cfg.Router.Select(llm.RoleFast))
 	if err != nil {
 		return nil, fmt.Errorf("build intent_classify tool: %w", err)
 	}
 
-	complianceTool, err := helpdesk.ComplianceCheckTool(cfg.DeepSeek)
+	complianceTool, err := helpdesk.ComplianceCheckTool(cfg.Router.Select(llm.RoleFast))
 	if err != nil {
 		return nil, fmt.Errorf("build compliance_check tool: %w", err)
 	}
 
 	// 2. Build knowledge RAG sub-agent.
-	ragTool, err := helpdesk.RAGSearchTool(cfg.DeepSeek)
+	ragTool, err := helpdesk.RAGSearchTool(cfg.Router.Select(llm.RoleReasoning), cfg.KB)
 	if err != nil {
 		return nil, fmt.Errorf("build RAG tool: %w", err)
 	}
@@ -41,7 +42,7 @@ func BuildSupervisor(ctx context.Context, cfg *HelpDeskConfig) (adk.ResumableAge
 	ragAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "knowledge_rag",
 		Description: "Searches the knowledge base for information about shipping, returns, payments, orders, and account management.",
-		Model:       cfg.DeepSeek,
+		Model:       cfg.Router.Select(llm.RoleDefault),
 		Instruction: `You are a knowledge base search agent.
 Your only tool is "knowledge_search" — use it to answer questions.
 When you receive the result, summarize the answer for the user.
@@ -75,7 +76,7 @@ After providing the answer, transfer back to the supervisor.`,
 	ticketAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "ticket_handler",
 		Description: "Creates, retrieves, and updates support tickets.",
-		Model:       cfg.Gemini,
+		Model:       cfg.Router.Select(llm.RoleDefault),
 		Instruction: `You are a ticket handling agent.
 Available tools:
 - create_ticket: Create a new ticket (requires customer_id, description, optional priority)
@@ -110,7 +111,7 @@ After completing the operation, transfer back to the supervisor.`,
 	// 5. Create supervisor agent.
 	supervisor, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:  "help_desk_supervisor",
-		Model: cfg.Gemini,
+		Model: cfg.Router.Select(llm.RoleDefault),
 		Instruction: `You are a customer service supervisor agent.
 
 TOOLS (lightweight functions, call directly):
