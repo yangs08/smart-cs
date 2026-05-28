@@ -30,19 +30,21 @@ func main() {
 		envOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
 		envOrDefault("LLM_EMBED_MODEL", "nomic-embed-text"),
 	)
-	kb, err := knowledge.NewHybridStore(
+	kb, _ := knowledge.NewHybridStore(
 		envOrDefault("QDRANT_ADDR", "localhost:6333"),
 		envOrDefault("QDRANT_COLLECTION", "helpdesk_kb"),
 		embedder,
-		knowledge.DefaultDocs(),
 	)
-	if err != nil {
-		log.Fatalf("init knowledge store: %v", err)
-	}
 
-	// Try to init Qdrant collection (best-effort — falls back to BM25-only).
-	if err := knowledge.InitKnowledgeBase(ctx, kb); err != nil {
-		log.Printf("[knowledge] qdrant unavailable, using BM25-only: %v", err)
+	// 3. Init knowledge base: load docs → embed → upsert Qdrant → persist BM25 stats.
+	statsPath := "./data/bm25_stats.json"
+	kb.SetStatsPath(statsPath)
+	loader := knowledge.NewStaticDocLoader(knowledge.DefaultDocs())
+	if err := knowledge.InitKnowledgeBase(ctx, kb, loader); err != nil {
+		log.Printf("[knowledge] qdrant unavailable, trying BM25 stats fallback: %v", err)
+		if err := kb.LoadStats(statsPath); err != nil {
+			log.Printf("[knowledge] no BM25 stats either, vector-only mode: %v", err)
+		}
 	}
 
 	// 3. Build supervisor agent.
