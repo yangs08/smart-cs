@@ -2,6 +2,7 @@ package helpdesk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -40,14 +41,13 @@ var complianceRules = []struct {
 // ComplianceCheckTool creates a tool that performs compliance checking including
 // PII detection, rule validation, and optional LLM verification.
 func ComplianceCheckTool(llm model.BaseChatModel) (tool.InvokableTool, error) {
-	return utils.InferTool[*ComplianceCheckInput, string](
+	return utils.InferTool[*ComplianceCheckInput, ComplianceResult](
 		"compliance_check",
 		"Check content for compliance: PII detection, rule violations, "+
-			"and optional LLM verification. "+
-			"Returns JSON: {\"is_compliant\":true,\"violations\":[...],\"pii_found\":false}",
-		func(ctx context.Context, input *ComplianceCheckInput) (string, error) {
+			"and optional LLM verification.",
+		func(ctx context.Context, input *ComplianceCheckInput) (ComplianceResult, error) {
 			if input.Content == "" {
-				return "", fmt.Errorf("empty content")
+				return ComplianceResult{}, fmt.Errorf("empty content")
 			}
 
 			var violations []string
@@ -95,7 +95,7 @@ func ComplianceCheckTool(llm model.BaseChatModel) (tool.InvokableTool, error) {
 				}
 			}
 
-			return formatComplianceResult(&result), nil
+			return result, nil
 		},
 	)
 }
@@ -127,10 +127,10 @@ func maskPII(piiType, value string) string {
 // in context (reduces false positives from regex matching).
 func llmVerify(ctx context.Context, llm model.BaseChatModel, content string, violations []string) (bool, error) {
 	sysPrompt := schema.SystemMessage(fmt.Sprintf(`You are a compliance verifier.
-The following content was flagged for possible violations: %s.
-Determine if the content is actually non-compliant in context.
-Consider: Is it a false positive? Is it a quote or reference?
-Respond with ONLY: {"is_compliant": true/false, "reason": "..."}`,
+	The following content was flagged for possible violations: %s.
+	Determine if the content is actually non-compliant in context.
+	Consider: Is it a false positive? Is it a quote or reference?
+	Respond with ONLY: {"is_compliant": true/false, "reason": "..."}`,
 		strings.Join(violations, ", ")))
 
 	prompt := schema.UserMessage(content)
@@ -141,22 +141,11 @@ Respond with ONLY: {"is_compliant": true/false, "reason": "..."}`,
 	}
 
 	body := strings.TrimSpace(resp.Content)
-	var compliant bool
-	if _, err := fmt.Sscanf(body, `{"is_compliant": %t`, &compliant); err != nil {
+	var parsed struct {
+		IsCompliant bool `json:"is_compliant"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
 		return true, nil
 	}
-	return compliant, nil
-}
-
-func formatComplianceResult(r *ComplianceResult) string {
-	violations := "[]"
-	if len(r.Violations) > 0 {
-		violations = `["` + strings.Join(r.Violations, `","`) + `"]`
-	}
-	sanitized := strings.ReplaceAll(r.SanitizedContent, `\`, `\\`)
-	sanitized = strings.ReplaceAll(sanitized, `"`, `\"`)
-	return fmt.Sprintf(
-		`{"is_compliant":%t,"violations":%s,"pii_found":%t,"sanitized_content":"%s","verified_by_llm":%t}`,
-		r.IsCompliant, violations, r.PIIFound, sanitized, r.VerifiedByLLM,
-	)
+	return parsed.IsCompliant, nil
 }

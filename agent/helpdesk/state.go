@@ -1,5 +1,24 @@
 package helpdesk
 
+// TicketResult is the structured output from ticket operations.
+type TicketResult struct {
+	TicketID    string `json:"ticket_id"`
+	Status      string `json:"status"`
+	Priority    string `json:"priority"`
+	CustomerID  string `json:"customer_id"`
+	Description string `json:"description,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// SearchResult is the structured output from the knowledge_search tool.
+type SearchResult struct {
+	Answer     string   `json:"answer"`
+	Sources    []string `json:"sources"`
+	Relevant   bool     `json:"relevant"`
+	Confidence float64  `json:"confidence"`
+}
+
 // IntentResult holds the classification result from intent_classify.
 type IntentResult struct {
 	Category   string  `json:"category"`

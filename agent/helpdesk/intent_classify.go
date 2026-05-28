@@ -2,6 +2,7 @@ package helpdesk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -45,26 +46,25 @@ var keywordCategory = map[string]string{
 // IntentClassifyTool creates a tool that classifies user intent using keyword
 // matching with LLM fallback for ambiguous queries.
 func IntentClassifyTool(llm model.BaseChatModel) (tool.InvokableTool, error) {
-	return utils.InferTool[*IntentClassifyInput, string](
+	return utils.InferTool[*IntentClassifyInput, IntentResult](
 		"intent_classify",
-		"Classify the user's query into an intent category. "+
-			"Returns JSON: {\"category\":\"...\",\"confidence\":0.85,\"sub_intent\":\"...\"}",
-		func(ctx context.Context, input *IntentClassifyInput) (string, error) {
+		"Classify the user's query into an intent category.",
+		func(ctx context.Context, input *IntentClassifyInput) (IntentResult, error) {
 			if input.Query == "" {
-				return "", fmt.Errorf("empty query")
+				return IntentResult{}, fmt.Errorf("empty query")
 			}
 
 			result := classifyByKeywords(input.Query)
 			if result != nil {
-				return formatResult(result), nil
+				return *result, nil
 			}
 
 			result, err := classifyByLLM(ctx, llm, input.Query)
 			if err != nil {
-				return "", fmt.Errorf("llm classification failed: %w", err)
+				return IntentResult{}, fmt.Errorf("llm classification failed: %w", err)
 			}
 
-			return formatResult(result), nil
+			return *result, nil
 		},
 	)
 }
@@ -103,11 +103,6 @@ Respond with ONLY a JSON object:
 	return parseLLMResponse(resp.Content)
 }
 
-func formatResult(r *IntentResult) string {
-	return fmt.Sprintf(`{"category":"%s","confidence":%.2f,"sub_intent":"%s"}`,
-		r.Category, r.Confidence, r.SubIntent)
-}
-
 // parseLLMResponse extracts IntentResult from LLM JSON response.
 func parseLLMResponse(content string) (*IntentResult, error) {
 	content = strings.TrimSpace(content)
@@ -116,21 +111,9 @@ func parseLLMResponse(content string) (*IntentResult, error) {
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
-	var cat, sub string
-	var conf float64
-
-	if _, err := fmt.Sscanf(content,
-		`{"category":"%s","confidence":%f,"sub_intent":"%s"}`,
-		&cat, &conf, &sub); err != nil {
+	var result IntentResult
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse LLM response: %s", content)
 	}
-
-	cat = strings.TrimRight(cat, "\",}")
-	sub = strings.TrimRight(sub, "\",}")
-
-	return &IntentResult{
-		Category:   cat,
-		Confidence: conf,
-		SubIntent:  sub,
-	}, nil
+	return &result, nil
 }

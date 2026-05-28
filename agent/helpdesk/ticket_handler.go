@@ -54,60 +54,74 @@ type UpdateTicketInput struct {
 
 // CreateTicketTool creates a tool that creates a new support ticket.
 func CreateTicketTool() (tool.InvokableTool, error) {
-	return utils.InferTool[*CreateTicketInput, string](
+	return utils.InferTool[*CreateTicketInput, TicketResult](
 		"create_ticket",
-		"Create a new support ticket. Returns the ticket ID and details as JSON.",
-		func(ctx context.Context, input *CreateTicketInput) (string, error) {
+		"Create a new support ticket. Returns the ticket details.",
+		func(ctx context.Context, input *CreateTicketInput) (TicketResult, error) {
 			if input.CustomerID == "" || input.Description == "" {
-				return "", fmt.Errorf("customer_id and description are required")
+				return TicketResult{}, fmt.Errorf("customer_id and description are required")
 			}
 			if input.Priority == "" {
 				input.Priority = "medium"
 			}
 
 			record := globalTickets.create(input.CustomerID, input.Description, input.Priority)
-			return fmt.Sprintf(`{"ticket_id":"%s","status":"%s","priority":"%s","customer_id":"%s"}`,
-				record.TicketID, record.Status, record.Priority, record.CustomerID), nil
+			return TicketResult{
+				TicketID:   record.TicketID,
+				Status:     record.Status,
+				Priority:   record.Priority,
+				CustomerID: record.CustomerID,
+			}, nil
 		},
 	)
 }
 
 // GetTicketTool creates a tool that retrieves a ticket by ID.
 func GetTicketTool() (tool.InvokableTool, error) {
-	return utils.InferTool[*GetTicketInput, string](
+	return utils.InferTool[*GetTicketInput, TicketResult](
 		"get_ticket",
-		"Get a support ticket by ID. Returns ticket details as JSON.",
-		func(ctx context.Context, input *GetTicketInput) (string, error) {
+		"Get a support ticket by ID. Returns ticket details.",
+		func(ctx context.Context, input *GetTicketInput) (TicketResult, error) {
 			if input.TicketID == "" {
-				return "", fmt.Errorf("ticket_id is required")
+				return TicketResult{}, fmt.Errorf("ticket_id is required")
 			}
 
 			record, ok := globalTickets.get(input.TicketID)
 			if !ok {
-				return fmt.Sprintf(`{"error":"ticket not found","ticket_id":"%s"}`, input.TicketID), nil
+				return TicketResult{
+					TicketID: input.TicketID,
+					Error:    "ticket not found",
+				}, nil
 			}
 
-			return fmt.Sprintf(
-				`{"ticket_id":"%s","status":"%s","priority":"%s","customer_id":"%s","description":"%s","created_at":"%s"}`,
-				record.TicketID, record.Status, record.Priority, record.CustomerID,
-				escapeJSON(record.Description), record.CreatedAt.Format(time.RFC3339)), nil
+			return TicketResult{
+				TicketID:    record.TicketID,
+				Status:      record.Status,
+				Priority:    record.Priority,
+				CustomerID:  record.CustomerID,
+				Description: record.Description,
+				CreatedAt:   record.CreatedAt.Format(time.RFC3339),
+			}, nil
 		},
 	)
 }
 
 // UpdateTicketTool creates a tool that updates an existing ticket.
 func UpdateTicketTool() (tool.InvokableTool, error) {
-	return utils.InferTool[*UpdateTicketInput, string](
+	return utils.InferTool[*UpdateTicketInput, TicketResult](
 		"update_ticket",
-		"Update a support ticket's status, description, or priority. Returns updated ticket as JSON.",
-		func(ctx context.Context, input *UpdateTicketInput) (string, error) {
+		"Update a support ticket's status, description, or priority. Returns updated ticket.",
+		func(ctx context.Context, input *UpdateTicketInput) (TicketResult, error) {
 			if input.TicketID == "" {
-				return "", fmt.Errorf("ticket_id is required")
+				return TicketResult{}, fmt.Errorf("ticket_id is required")
 			}
 
 			_, ok := globalTickets.get(input.TicketID)
 			if !ok {
-				return fmt.Sprintf(`{"error":"ticket not found","ticket_id":"%s"}`, input.TicketID), nil
+				return TicketResult{
+					TicketID: input.TicketID,
+					Error:    "ticket not found",
+				}, nil
 			}
 
 			globalTickets.update(input.TicketID, func(r *ticketRecord) {
@@ -124,10 +138,13 @@ func UpdateTicketTool() (tool.InvokableTool, error) {
 			})
 
 			record, _ := globalTickets.get(input.TicketID)
-			return fmt.Sprintf(
-				`{"ticket_id":"%s","status":"%s","priority":"%s","customer_id":"%s","description":"%s"}`,
-				record.TicketID, record.Status, record.Priority, record.CustomerID,
-				escapeJSON(record.Description)), nil
+			return TicketResult{
+				TicketID:    record.TicketID,
+				Status:      record.Status,
+				Priority:    record.Priority,
+				CustomerID:  record.CustomerID,
+				Description: record.Description,
+			}, nil
 		},
 	)
 }

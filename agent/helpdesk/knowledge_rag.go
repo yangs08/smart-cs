@@ -19,24 +19,27 @@ type RAGInput struct {
 
 // RAGSearchTool creates a tool that performs hybrid search and synthesizes an answer.
 func RAGSearchTool(llm model.BaseChatModel, store *knowledge.HybridStore) (tool.InvokableTool, error) {
-	return utils.InferTool[*RAGInput, string](
+	return utils.InferTool[*RAGInput, SearchResult](
 		"knowledge_search",
 		"Search the knowledge base for information related to the query. "+
 			"Returns a synthesized answer with source references.",
-		func(ctx context.Context, input *RAGInput) (string, error) {
+		func(ctx context.Context, input *RAGInput) (SearchResult, error) {
 			if input.Query == "" {
-				return "", fmt.Errorf("empty query")
+				return SearchResult{}, fmt.Errorf("empty query")
 			}
 
 			// 1. Hybrid search: BM25 + vector + RRF
 			results, hasResult, err := store.Search(ctx, input.Query, 3)
 			if err != nil {
-				return fmt.Sprintf(`{"answer":"Search failed: %v","sources":[],"relevant":false}`, err), nil
+				return SearchResult{Answer: fmt.Sprintf("Search failed: %v", err)}, nil
 			}
 
 			// 2. Check confidence threshold
 			if !hasResult || len(results) == 0 {
-				return `{"answer":"I couldn't find relevant information in the knowledge base.","sources":[],"relevant":false}`, nil
+				return SearchResult{
+					Answer:   "I couldn't find relevant information in the knowledge base.",
+					Relevant: false,
+				}, nil
 			}
 
 			// 3. Build context from top results
@@ -53,11 +56,13 @@ func RAGSearchTool(llm model.BaseChatModel, store *knowledge.HybridStore) (tool.
 				answer = fmt.Sprintf("Found %d relevant documents:\n%s", len(results), contextBuilder.String())
 			}
 
-			// 5. Return JSON with confidence info
-			srcJSON := `"` + strings.Join(sources, `","`) + `"`
-			topScore := results[0].Score
-			return fmt.Sprintf(`{"answer":"%s","sources":[%s],"relevant":true,"confidence":%.4f}`,
-				escapeJSON(answer), srcJSON, topScore), nil
+			// 5. Return structured result (Eino auto-serializes to JSON)
+			return SearchResult{
+				Answer:     answer,
+				Sources:    sources,
+				Relevant:   true,
+				Confidence: results[0].Score,
+			}, nil
 		},
 	)
 }
@@ -80,9 +85,3 @@ Context:
 	return resp.Content, nil
 }
 
-func escapeJSON(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", `\n`)
-	return s
-}
