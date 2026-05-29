@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"helpdesk-agent/agent"
 	"helpdesk-agent/api"
@@ -13,16 +17,21 @@ import (
 	"helpdesk-agent/tracing"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/callbacks"
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	ctx := context.Background()
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	// 1. Initialize model router from environment variables.
 	router, err := llm.NewRouter(ctx)
 	if err != nil {
-		log.Fatalf("init model router: %v", err)
+		slog.Error("init model router", "error", err)
+		os.Exit(1)
 	}
 
 	// 2. Initialize hybrid knowledge store.
@@ -41,9 +50,9 @@ func main() {
 	kb.SetStatsPath(statsPath)
 	loader := knowledge.NewStaticDocLoader(knowledge.DefaultDocs())
 	if err := knowledge.InitKnowledgeBase(ctx, kb, loader); err != nil {
-		log.Printf("[knowledge] qdrant unavailable, trying BM25 stats fallback: %v", err)
+		slog.Warn("qdrant unavailable, trying BM25 stats fallback", "error", err)
 		if err := kb.LoadStats(statsPath); err != nil {
-			log.Printf("[knowledge] no BM25 stats either, vector-only mode: %v", err)
+			slog.Warn("no BM25 stats either, vector-only mode", "error", err)
 		}
 	}
 
@@ -53,7 +62,8 @@ func main() {
 		KB:     kb,
 	})
 	if err != nil {
-		log.Fatalf("build supervisor: %v", err)
+		slog.Error("build supervisor", "error", err)
+		os.Exit(1)
 	}
 
 	// 4. Initialize memory layers.
@@ -65,7 +75,8 @@ func main() {
 	}
 	longTerm, err := memory.NewLongTermMemory(dataDir)
 	if err != nil {
-		log.Fatalf("init long-term memory: %v", err)
+		slog.Error("init long-term memory", "error", err)
+		os.Exit(1)
 	}
 
 	// 5. Create runner.
@@ -76,9 +87,9 @@ func main() {
 
 	// 6. Start API server.
 	tracer := tracing.NewTracer()
-	_ = tracer
+	callbacks.InitCallbackHandlers([]callbacks.Handler{tracer})
 
-	server := api.NewServer(runner, shortTerm, longTerm)
+	server := api.NewServer(runner, shortTerm, longTerm, kb)
 
 	ginEngine := gin.Default()
 	server.RegisterRoutes(ginEngine)
@@ -88,9 +99,28 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("helpdesk agent starting on :%s", port)
-	if err := ginEngine.Run(":" + port); err != nil {
-		log.Fatalf("server error: %v", err)
+	slog.Info("helpdesk agent starting", "port", port)
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: ginEngine,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-ctx.Done()
+	slog.Info("shutting down gracefully...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("forced shutdown", "error", err)
+		os.Exit(1)
 	}
 }
 

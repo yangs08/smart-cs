@@ -9,7 +9,6 @@ FROM alpine:3.19
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/helpdesk-agent .
-COPY --from=builder /app/config/llm.yaml ./config/
 COPY .env .env
 EXPOSE 8080
 CMD ["./helpdesk-agent"]

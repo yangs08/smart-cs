@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Embedder generates vector embeddings for text.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
+	Ping(ctx context.Context) error
 }
 
 // OllamaEmbedder calls Ollama's /api/embed endpoint.
@@ -26,8 +28,21 @@ func NewOllamaEmbedder(baseURL, model string) *OllamaEmbedder {
 	return &OllamaEmbedder{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+func (e *OllamaEmbedder) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", e.baseURL+"/api/tags", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float64, error) {

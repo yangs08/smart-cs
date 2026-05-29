@@ -46,8 +46,7 @@ func BuildSupervisor(ctx context.Context, cfg *HelpDeskConfig) (adk.ResumableAge
 		Instruction: `You are a knowledge base search agent.
 Your only tool is "knowledge_search" — use it to answer questions.
 When you receive the result, summarize the answer for the user.
-If the search returns no relevant results, say so politely.
-After providing the answer, transfer back to the supervisor.`,
+If the search returns no relevant results, say so politely.`,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: []tool.BaseTool{ragTool},
@@ -75,7 +74,7 @@ After providing the answer, transfer back to the supervisor.`,
 
 	ticketAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "ticket_handler",
-		Description: "Creates, retrieves, and updates support tickets.",
+		Description: "Creates, retrieves, and updates support tickets. Use this for refund requests, order issues, and account problems.",
 		Model:       cfg.Router.Select(llm.RoleDefault),
 		Instruction: `You are a ticket handling agent.
 Available tools:
@@ -83,8 +82,7 @@ Available tools:
 - get_ticket: Look up a ticket by ID
 - update_ticket: Update a ticket's status, description, or priority
 
-When creating a ticket, ask for any missing required information.
-After completing the operation, transfer back to the supervisor.`,
+When creating a ticket, ask for any missing required information.`,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: []tool.BaseTool{createTicket, getTicket, updateTicket},
@@ -96,19 +94,11 @@ After completing the operation, transfer back to the supervisor.`,
 		return nil, fmt.Errorf("build ticket_handler agent: %w", err)
 	}
 
-	// 4. Wrap sub-agents with deterministic transfer back to supervisor.
-	subAgents := []adk.Agent{
-		adk.AgentWithDeterministicTransferTo(ctx, &adk.DeterministicTransferConfig{
-			Agent:        ragAgent,
-			ToAgentNames: []string{"help_desk_supervisor"},
-		}),
-		adk.AgentWithDeterministicTransferTo(ctx, &adk.DeterministicTransferConfig{
-			Agent:        ticketAgent,
-			ToAgentNames: []string{"help_desk_supervisor"},
-		}),
-	}
+	// 4. Wrap sub-agents as tools that the supervisor can call directly.
+	ragAgentTool := adk.NewAgentTool(ctx, ragAgent)
+	ticketAgentTool := adk.NewAgentTool(ctx, ticketAgent)
 
-	// 5. Create supervisor agent.
+	// 5. Create supervisor agent with all tools (direct + sub-agent tools).
 	supervisor, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:  "help_desk_supervisor",
 		Model: cfg.Router.Select(llm.RoleDefault),
@@ -118,34 +108,33 @@ TOOLS (lightweight functions, call directly):
 - intent_classify: Classify user query intent (call first)
 - compliance_check: Check content for PII and rule violations
 
-SUB-AGENTS (transfer when needed):
+SUB-AGENTS (call as tools when needed):
 - knowledge_rag: For questions about shipping, returns, payments, orders, or account help
-- ticket_handler: For creating, updating, or checking support tickets
+- ticket_handler: For creating, updating, or checking support tickets (refunds, order issues)
 
 WORKFLOW:
 1. Call intent_classify to understand the user's intent
 2. Based on the result:
-   - Greeting / simple questions -> reply directly
-   - Knowledge/inquiry questions -> transfer to knowledge_rag
-   - Ticket operations -> transfer to ticket_handler
+   - Greeting / simple questions -> reply directly with a friendly greeting
+   - Knowledge/inquiry questions -> call knowledge_rag to search
+   - Ticket operations -> call ticket_handler to handle it
    - Compliance-sensitive content -> call compliance_check
 3. Synthesize the final response for the user
 
 EXAMPLES:
-User: "我的订单怎么还没到" -> intent_classify -> order_inquiry -> transfer to knowledge_rag
-User: "我要退款" -> intent_classify -> refund_request -> transfer to ticket_handler
+User: "我的订单怎么还没到" -> intent_classify -> order_inquiry -> call knowledge_rag
+User: "我要退款" -> intent_classify -> refund_request -> call ticket_handler
 User: "你好" -> intent_classify -> greeting -> reply directly`,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: []tool.BaseTool{intentTool, complianceTool},
+				Tools: []tool.BaseTool{intentTool, complianceTool, ragAgentTool, ticketAgentTool},
 			},
 		},
-		MaxIterations: 20,
+		MaxIterations: 10,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build supervisor: %w", err)
 	}
 
-	// 6. Register sub-agents.
-	return adk.SetSubAgents(ctx, supervisor, subAgents)
+	return supervisor, nil
 }

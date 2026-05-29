@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -53,7 +54,7 @@ func NewHybridStore(qdrantAddr, collection string, embedder Embedder) (*HybridSt
 	return &HybridStore{
 		qdrantURL:  fmt.Sprintf("http://%s", qdrantAddr),
 		collection: collection,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 		embedder:   embedder,
 	}, nil
 }
@@ -187,6 +188,23 @@ func (s *HybridStore) bm25SingleScore(docLen int, content string, queryTerms map
 		score += idf * numer / denom
 	}
 	return score
+}
+
+// PingQdrant checks if Qdrant is reachable.
+func (s *HybridStore) PingQdrant(ctx context.Context) error {
+	collURL := fmt.Sprintf("%s/collections/%s", s.qdrantURL, s.collection)
+	req, _ := http.NewRequestWithContext(ctx, "GET", collURL, nil)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// PingEmbedder checks if the embedding service is reachable.
+func (s *HybridStore) PingEmbedder(ctx context.Context) error {
+	return s.embedder.Ping(ctx)
 }
 
 // ----- Qdrant REST API -----

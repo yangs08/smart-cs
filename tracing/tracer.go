@@ -2,7 +2,7 @@ package tracing
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/cloudwego/eino/callbacks"
@@ -31,20 +31,20 @@ func (t *Tracer) Needed(_ context.Context, _ *callbacks.RunInfo, timing callback
 
 func (t *Tracer) OnStart(ctx context.Context, info *callbacks.RunInfo, _ callbacks.CallbackInput) context.Context {
 	t.startTimes[info.Name] = time.Now()
-	log.Printf("[TRACE START] %s | type=%s", info.Name, info.Type)
+	slog.Debug("trace start", "name", info.Name, "type", info.Type)
 	return ctx
 }
 
 func (t *Tracer) OnEnd(ctx context.Context, info *callbacks.RunInfo, _ callbacks.CallbackOutput) context.Context {
 	if start, ok := t.startTimes[info.Name]; ok {
-		log.Printf("[TRACE END]   %s | duration=%v", info.Name, time.Since(start))
+		slog.Debug("trace end", "name", info.Name, "duration", time.Since(start))
 		delete(t.startTimes, info.Name)
 	}
 	return ctx
 }
 
 func (t *Tracer) OnError(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
-	log.Printf("[TRACE ERROR] %s | err=%v", info.Name, err)
+	slog.Error("trace error", "name", info.Name, "error", err)
 	return ctx
 }
 

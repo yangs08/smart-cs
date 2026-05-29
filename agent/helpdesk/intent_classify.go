@@ -14,7 +14,7 @@ import (
 
 // IntentClassifyInput is the input for the intent classification tool.
 type IntentClassifyInput struct {
-	Query string `json:"query" jsonschema:"-" description:"The user's query to classify"`
+	Query string `json:"query" description:"The user's query to classify"`
 }
 
 // keywordCategory maps keywords to intent categories for fast O(1) matching.

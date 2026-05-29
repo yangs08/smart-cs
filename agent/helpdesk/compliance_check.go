@@ -15,7 +15,7 @@ import (
 
 // ComplianceCheckInput is the input for the compliance check tool.
 type ComplianceCheckInput struct {
-	Content string `json:"content" jsonschema:"-" description:"The content to check for compliance"`
+	Content string `json:"content" description:"The content to check for compliance"`
 }
 
 // piiPatterns defines regex patterns for detecting PII in content.

@@ -14,7 +14,7 @@ import (
 )
 
 type RAGInput struct {
-	Query string `json:"query" jsonschema:"-"`
+	Query string `json:"query" description:"The search query for knowledge base retrieval"`
 }
 
 // RAGSearchTool creates a tool that performs hybrid search and synthesizes an answer.
